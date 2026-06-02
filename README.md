@@ -1,5 +1,7 @@
 # Notion-sync
 
+[![npm](https://img.shields.io/npm/v/notion-sync-cli)](https://www.npmjs.com/package/notion-sync-cli) [![npm downloads](https://img.shields.io/npm/dm/notion-sync-cli)](https://www.npmjs.com/package/notion-sync-cli) [![license](https://img.shields.io/github/license/Chaelsoo/Notion-sync)](./LICENSE)
+
 Pull Notion database pages as local Markdown files — images included, reliably.
 
 ```
