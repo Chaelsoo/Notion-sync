@@ -1,10 +1,10 @@
 {
-  "name": "notion-sync",
+  "name": "notion-sync-cli",
   "version": "1.0.0",
   "description": "Pull and sync Notion pages and databases to local markdown files with images",
   "main": "src/cli.js",
   "bin": {
-    "notion-sync": "./src/cli.js"
+    "notion-sync": "src/cli.js"
   },
   "type": "module",
   "scripts": {
@@ -32,7 +32,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chaelsoo/notion-sync.git"
+    "url": "git+https://github.com/chaelsoo/notion-sync.git"
   },
   "homepage": "https://github.com/chaelsoo/notion-sync#readme",
   "engines": {
