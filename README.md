@@ -28,17 +28,30 @@ npx notion-sync <command>
 
 ## Setup
 
-**1. Create a Notion integration**
+**1. Get a token**
 
-Go to [notion.so/my-integrations](https://www.notion.so/my-integrations), create an integration, copy the token.
+Notion-sync works best with a **Personal Access Token (PAT)**:
 
-Or use a **PAT** (Personal Access Token) from Notion settings → My connections → Develop or manage integrations.
+1. Go to [notion.so/profile/personal-access-tokens](https://www.notion.so/profile/personal-access-tokens)
+2. Click **New personal access token**
+3. Give it a name, select your workspace, and enable the capabilities you need (at minimum: read content)
+4. Copy the token - it starts with `ntn_`
 
-**2. Share your database with the integration**
+> Alternatively, use an integration token from [notion.so/profile/integrations](https://www.notion.so/profile/integrations). Images will still work but URLs expire after ~1 hour and are refreshed on each sync run.
 
-Open your Notion database → Share → Invite your integration.
+**2. Add the token to your .env**
 
-**3. Init the config**
+```bash
+NOTION_TOKEN=ntn_xxxxxxxxxxxx
+```
+
+**3. Share your content with the token**
+
+For PATs: the token automatically has access to everything you can access in Notion.
+
+For integration tokens: open each database or page you want to sync, click `...`, **Add connections**, and select your integration.
+
+**4. Init the config**
 
 ```bash
 notion-sync init
@@ -59,14 +72,6 @@ Edit the generated `notion-sync.config.json`:
   }
 }
 ```
-
-**4. Set your token**
-
-```bash
-export NOTION_TOKEN=secret_xxxxxxxxxxxx
-```
-
-Or put it in the config (not recommended if you're committing the file).
 
 ---
 
