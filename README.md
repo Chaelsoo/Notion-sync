@@ -21,10 +21,16 @@ Use the output however you want: Astro, Hugo, Obsidian, plain files, whatever.
 ## Install
 
 ```bash
-npm install -g notion-sync
-# or run without installing:
-npx notion-sync <command>
+npm install -g notion-sync-cli
 ```
+
+Or run without installing:
+
+```bash
+npx notion-sync-cli init
+```
+
+After global install, use it as `notion-sync` from anywhere.
 
 ## Setup
 
