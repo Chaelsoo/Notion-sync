@@ -1,0 +1,5 @@
+node_modules/
+output/
+.notion-sync-state.json
+notion-sync.config.json
+.env
