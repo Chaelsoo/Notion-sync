@@ -290,6 +290,7 @@ program
   .description("Pull pages from Notion as local markdown files")
   .option("-c, --config <path>", "Path to config file", CONFIG_FILE)
   .option("-p, --page <id>", "Pull a single page by ID (overrides config)")
+  .option("-n, --name <query>", "Pull pages whose title contains the query (case-insensitive)")
   .option("--pick", "Interactively pick which pages to pull this run")
   .option("--force", "Re-sync all pages, ignoring last-synced state")
   .option("--dry-run", "Preview what would be synced without writing files")
@@ -326,6 +327,30 @@ program
         const page = await syncer.notion.pages.retrieve({ page_id: opts.page });
         pages = [page];
         spinner.succeed(`Page: ${getPageTitle(page)}`);
+      } catch (err) {
+        spinner.fail(chalk.red(`Failed: ${err.message}`));
+        process.exit(1);
+      }
+
+    } else if (opts.name) {
+      // Search by title across the database
+      if (!config.database_id) {
+        console.error(chalk.red("✗ --name requires a database source. Run: notion-sync init"));
+        process.exit(1);
+      }
+      const spinner = ora(`Searching for "${opts.name}"...`).start();
+      try {
+        const all = [];
+        for await (const page of syncer.queryDatabase(config.database_id)) {
+          all.push(page);
+        }
+        const query = opts.name.toLowerCase();
+        pages = all.filter((p) => getPageTitle(p).toLowerCase().includes(query));
+        if (pages.length === 0) {
+          spinner.fail(chalk.red(`No pages found matching "${opts.name}"`));
+          process.exit(1);
+        }
+        spinner.succeed(`Found ${pages.length} match${pages.length !== 1 ? "es" : ""} for "${opts.name}"`);
       } catch (err) {
         spinner.fail(chalk.red(`Failed: ${err.message}`));
         process.exit(1);
