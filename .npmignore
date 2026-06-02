@@ -1,0 +1,7 @@
+node_modules/
+output/
+.env
+.notion-sync-state.json
+notion-sync.config.json
+check-url.js
+.gitignore
