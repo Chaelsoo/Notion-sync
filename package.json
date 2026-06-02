@@ -1,6 +1,6 @@
 {
   "name": "notion-sync-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pull and sync Notion pages and databases to local markdown files with images",
   "main": "src/cli.js",
   "bin": {
