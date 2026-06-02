@@ -111,9 +111,12 @@ Pull all pages from the database. Only re-syncs pages that changed since the las
 
 ```bash
 notion-sync pull
-notion-sync pull --force             # ignore sync state, re-sync everything
-notion-sync pull --page <id>         # single page by Notion page ID
-notion-sync pull --dry-run           # preview without writing
+notion-sync pull --force               # ignore sync state, re-sync everything
+notion-sync pull --page <id>           # single page by Notion page ID
+notion-sync pull --name "Escape"       # pull pages whose title contains "Escape"
+notion-sync pull --name "HTB"          # pulls all pages containing "HTB" (case-insensitive)
+notion-sync pull --pick                # interactively pick which pages to pull
+notion-sync pull --dry-run             # preview without writing
 notion-sync pull --config ./custom.config.json
 ```
 
