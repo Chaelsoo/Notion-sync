@@ -128,13 +128,22 @@ program
         }
       }
 
+      // Fetch one page to auto-detect frontmatter properties
+      let frontmatter = { title: "Name" };
+      try {
+        const syncer = new NotionSync({ token, space_id: spaceId });
+        syncer.spaceId = spaceId;
+        const firstPage = await syncer.queryDatabase(opts.databaseId).next();
+        if (firstPage.value) frontmatter = buildFrontmatterMap(firstPage.value);
+      } catch { /* fall back to default */ }
+
       const config = {
         space_id: spaceId,
         source: "database",
         database_id: opts.databaseId,
         output_dir: opts.output,
         slug_property: null,
-        frontmatter: { title: "Name" },
+        frontmatter,
       };
 
       await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
