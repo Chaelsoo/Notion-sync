@@ -35,7 +35,7 @@ function getToken() {
   if (!token) {
     console.error(
       chalk.red("✗ NOTION_TOKEN is not set.") +
-        chalk.dim("\n  Add NOTION_TOKEN=your_token to your .env file and source it.")
+        chalk.dim("\n  Add NOTION_TOKEN=your_token to your .env file.")
     );
     process.exit(1);
   }
@@ -43,11 +43,9 @@ function getToken() {
 }
 
 function getPageTitle(page) {
-  // Database: title is a rich_text array at root level
   if (Array.isArray(page.title)) {
     return page.title.map((t) => t.plain_text).join("").trim() || "(Untitled)";
   }
-  // Page: title lives inside properties
   if (page.properties) {
     const titleProp = Object.values(page.properties).find((p) => p.type === "title");
     return titleProp?.title?.map((t) => t.plain_text).join("").trim() || "(Untitled)";
@@ -69,13 +67,83 @@ function buildFrontmatterMap(samplePage) {
   return fm;
 }
 
+async function deriveSpaceId(token, blockId) {
+  const res = await fetch("https://www.notion.so/api/v3/syncRecordValues", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ requests: [{ pointer: { table: "block", id: blockId }, version: -1 }] }),
+  });
+  if (!res.ok) throw new Error(`syncRecordValues returned ${res.status}`);
+  const data = await res.json();
+  const outer = data?.recordMap?.block?.[blockId];
+  const block = outer?.value?.value || outer?.value;
+  const spaceId = block?.space_id || outer?.spaceId || null;
+  if (!spaceId) throw new Error("Could not resolve space_id from response");
+  return spaceId;
+}
+
+// Logging helper - respects --quiet flag
+function makeLog(quiet) {
+  return {
+    info: (...args) => { if (!quiet) console.log(...args); },
+    error: (...args) => console.error(...args), // errors always shown
+    spinner: (text) => {
+      if (quiet) return { start: () => {}, succeed: () => {}, fail: (msg) => { console.error(msg); }, text: "" };
+      return ora(text).start();
+    },
+  };
+}
+
 // ── init ──────────────────────────────────────────────────────────────────────
 
 program
   .command("init")
   .description("Interactive setup - pick workspace, then database or pages to sync")
   .option("--overwrite", "Overwrite existing config if present")
+  .option("--non-interactive", "Skip prompts, use CLI flags instead")
+  .option("--database-id <id>", "Database ID (for --non-interactive)")
+  .option("--space-id <id>", "Space ID (for --non-interactive, optional - auto-detected if omitted)")
+  .option("--output <dir>", "Output directory (for --non-interactive)", "./output")
   .action(async (opts) => {
+
+    // ── Non-interactive mode ───────────────────────────────────────────────
+
+    if (opts.nonInteractive) {
+      if (!opts.databaseId) {
+        console.error(chalk.red("✗ --database-id is required with --non-interactive"));
+        process.exit(1);
+      }
+
+      const token = getToken();
+      let spaceId = opts.spaceId || null;
+
+      if (!spaceId) {
+        const spinner = ora("Resolving workspace...").start();
+        try {
+          spaceId = await deriveSpaceId(token, opts.databaseId);
+          spinner.succeed(chalk.dim(`Space ID: ${spaceId}`));
+        } catch (err) {
+          spinner.fail(chalk.red(`Failed to resolve space_id: ${err.message}`));
+          process.exit(1);
+        }
+      }
+
+      const config = {
+        space_id: spaceId,
+        source: "database",
+        database_id: opts.databaseId,
+        output_dir: opts.output,
+        slug_property: null,
+        frontmatter: { title: "Name" },
+      };
+
+      await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+      console.log(chalk.green(`✓ Saved ${CONFIG_FILE}`));
+      return;
+    }
+
+    // ── Interactive mode ───────────────────────────────────────────────────
+
     if (existsSync(CONFIG_FILE) && !opts.overwrite) {
       const { proceed } = await inquirer.prompt([{
         type: "confirm",
@@ -91,10 +159,8 @@ program
 
     console.log(chalk.bold("\n  Notion-sync\n"));
 
-    // ── Step 1: database or page ──────────────────────────────────────────
     // Note: workspace listing requires a browser session cookie (token_v2),
-    // not a PAT. We derive space_id automatically from syncRecordValues
-    // after the user picks their database or page.
+    // not a PAT. We derive space_id from syncRecordValues after the user picks.
 
     const { syncType } = await inquirer.prompt([{
       type: "select",
@@ -137,7 +203,6 @@ program
         pageSize: 20,
       }]);
 
-      // Fetch pages from that DB
       const pageSpinner = ora("Fetching pages...").start();
       const syncer = new NotionSync({ token });
       const allPages = [];
@@ -151,23 +216,11 @@ program
         process.exit(1);
       }
 
-      // Derive space_id from syncRecordValues on the first page
       const spaceSpinner = ora("Resolving workspace...").start();
       let spaceId = null;
       try {
         const firstId = allPages[0]?.id || databaseId;
-        const svRes = await fetch("https://www.notion.so/api/v3/syncRecordValues", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ requests: [{ pointer: { table: "block", id: firstId }, version: -1 }] }),
-        });
-        if (svRes.ok) {
-          const svData = await svRes.json();
-          const outer = svData?.recordMap?.block?.[firstId];
-          const block = outer?.value?.value || outer?.value;
-          spaceId = block?.space_id || outer?.spaceId || null;
-        }
-        if (!spaceId) throw new Error("Could not resolve space_id");
+        spaceId = await deriveSpaceId(token, firstId);
         spaceSpinner.succeed(chalk.dim(`Space ID: ${spaceId}`));
       } catch (err) {
         spaceSpinner.fail(chalk.red(`Failed to resolve workspace: ${err.message}`));
@@ -246,23 +299,10 @@ program
         validate: (v) => v.length > 0 || "Select at least one page",
       }]);
 
-      // Derive space_id from syncRecordValues on the first picked page
       const spaceSpinner = ora("Resolving workspace...").start();
       let spaceId = null;
       try {
-        const firstId = pickedPages[0];
-        const svRes = await fetch("https://www.notion.so/api/v3/syncRecordValues", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ requests: [{ pointer: { table: "block", id: firstId }, version: -1 }] }),
-        });
-        if (svRes.ok) {
-          const svData = await svRes.json();
-          const outer = svData?.recordMap?.block?.[firstId];
-          const block = outer?.value?.value || outer?.value;
-          spaceId = block?.space_id || outer?.spaceId || null;
-        }
-        if (!spaceId) throw new Error("Could not resolve space_id");
+        spaceId = await deriveSpaceId(token, pickedPages[0]);
         spaceSpinner.succeed(chalk.dim(`Space ID: ${spaceId}`));
       } catch (err) {
         spaceSpinner.fail(chalk.red(`Failed to resolve workspace: ${err.message}`));
@@ -291,13 +331,19 @@ program
   .option("-c, --config <path>", "Path to config file", CONFIG_FILE)
   .option("-p, --page <id>", "Pull a single page by ID (overrides config)")
   .option("-n, --name <query>", "Pull pages whose title contains the query (case-insensitive)")
+  .option("-o, --output <dir>", "Output directory (overrides config output_dir)")
   .option("--pick", "Interactively pick which pages to pull this run")
   .option("--force", "Re-sync all pages, ignoring last-synced state")
   .option("--dry-run", "Preview what would be synced without writing files")
+  .option("--quiet", "Suppress all output except errors")
   .action(async (opts) => {
     const token = getToken();
     const rawConfig = await loadConfig(opts.config);
     const config = { ...rawConfig, token };
+    const log = makeLog(opts.quiet);
+
+    // --name and --page are non-interactive by design, skip --pick
+    const nonInteractive = !!(opts.name || opts.page);
 
     if (!config.space_id) {
       console.error(
@@ -307,12 +353,12 @@ program
       process.exit(1);
     }
 
-    const outputDir = resolve(config.output_dir || "./output");
+    // --output flag overrides config output_dir
+    const outputDir = resolve(opts.output || config.output_dir || "./output");
     const stateFile = resolve(STATE_FILE);
 
     if (!opts.dryRun) mkdirSync(outputDir, { recursive: true });
 
-    // space_id comes from config - no auto-detection needed at pull time
     const syncer = new NotionSync(config);
     syncer.spaceId = config.space_id;
 
@@ -322,23 +368,22 @@ program
     // ── Collect pages ──────────────────────────────────────────────────────
 
     if (opts.page) {
-      const spinner = ora("Fetching page...").start();
+      const s = log.spinner("Fetching page...");
       try {
         const page = await syncer.notion.pages.retrieve({ page_id: opts.page });
         pages = [page];
-        spinner.succeed(`Page: ${getPageTitle(page)}`);
+        s.succeed(`Page: ${getPageTitle(page)}`);
       } catch (err) {
-        spinner.fail(chalk.red(`Failed: ${err.message}`));
+        s.fail(chalk.red(`Failed: ${err.message}`));
         process.exit(1);
       }
 
     } else if (opts.name) {
-      // Search by title across the database
       if (!config.database_id) {
         console.error(chalk.red("✗ --name requires a database source. Run: notion-sync init"));
         process.exit(1);
       }
-      const spinner = ora(`Searching for "${opts.name}"...`).start();
+      const s = log.spinner(`Searching for "${opts.name}"...`);
       try {
         const all = [];
         for await (const page of syncer.queryDatabase(config.database_id)) {
@@ -347,25 +392,25 @@ program
         const query = opts.name.toLowerCase();
         pages = all.filter((p) => getPageTitle(p).toLowerCase().includes(query));
         if (pages.length === 0) {
-          spinner.fail(chalk.red(`No pages found matching "${opts.name}"`));
+          s.fail(chalk.red(`No pages found matching "${opts.name}"`));
           process.exit(1);
         }
-        spinner.succeed(`Found ${pages.length} match${pages.length !== 1 ? "es" : ""} for "${opts.name}"`);
+        s.succeed(`Found ${pages.length} match${pages.length !== 1 ? "es" : ""} for "${opts.name}"`);
       } catch (err) {
-        spinner.fail(chalk.red(`Failed: ${err.message}`));
+        s.fail(chalk.red(`Failed: ${err.message}`));
         process.exit(1);
       }
 
     } else if (config.source === "pages" || config.page_ids) {
-      const spinner = ora("Fetching pages...").start();
+      const s = log.spinner("Fetching pages...");
       try {
         for (const id of config.page_ids || []) {
           const page = await syncer.notion.pages.retrieve({ page_id: id });
           pages.push(page);
         }
-        spinner.succeed(`Fetched ${pages.length} page${pages.length !== 1 ? "s" : ""}`);
+        s.succeed(`Fetched ${pages.length} page${pages.length !== 1 ? "s" : ""}`);
       } catch (err) {
-        spinner.fail(chalk.red(`Failed: ${err.message}`));
+        s.fail(chalk.red(`Failed: ${err.message}`));
         process.exit(1);
       }
 
@@ -374,7 +419,7 @@ program
         console.error(chalk.red("✗ No database_id in config. Run: notion-sync init"));
         process.exit(1);
       }
-      const spinner = ora("Fetching pages...").start();
+      const s = log.spinner("Fetching pages...");
       try {
         const all = [];
         for await (const page of syncer.queryDatabase(config.database_id)) {
@@ -383,16 +428,16 @@ program
         pages = config.page_filter?.length
           ? all.filter((p) => config.page_filter.includes(p.id))
           : all;
-        spinner.succeed(`Found ${pages.length} page${pages.length !== 1 ? "s" : ""}`);
+        s.succeed(`Found ${pages.length} page${pages.length !== 1 ? "s" : ""}`);
       } catch (err) {
-        spinner.fail(chalk.red(`Failed: ${err.message}`));
+        s.fail(chalk.red(`Failed: ${err.message}`));
         process.exit(1);
       }
     }
 
-    // ── Interactive picker ─────────────────────────────────────────────────
+    // ── Interactive picker (skipped when --name or --page are used) ────────
 
-    if (opts.pick && pages.length > 0) {
+    if (!nonInteractive && opts.pick && pages.length > 0) {
       const { picked } = await inquirer.prompt([{
         type: "checkbox",
         name: "picked",
@@ -414,46 +459,46 @@ program
       });
       const skipped = before - pages.length;
       if (skipped > 0)
-        console.log(chalk.dim(`  ${skipped} page${skipped !== 1 ? "s" : ""} up to date, skipping`));
+        log.info(chalk.dim(`  ${skipped} page${skipped !== 1 ? "s" : ""} up to date, skipping`));
     }
 
     if (pages.length === 0) {
-      console.log(chalk.green("✓ Everything is up to date"));
-      return;
+      log.info(chalk.green("✓ Everything is up to date"));
+      process.exit(0);
     }
 
     // ── Dry run ────────────────────────────────────────────────────────────
 
     if (opts.dryRun) {
-      console.log(chalk.yellow(`\nDry run - would sync ${pages.length} page${pages.length !== 1 ? "s" : ""}:\n`));
+      log.info(chalk.yellow(`\nDry run - would sync ${pages.length} page${pages.length !== 1 ? "s" : ""}:\n`));
       for (const page of pages) {
         const slug = syncer.getSlug(page, config.slug_property);
-        console.log(`  ${chalk.dim(outputDir + "/")}${slug}/  ${chalk.dim(getPageTitle(page))}`);
+        log.info(`  ${chalk.dim(outputDir + "/")}${slug}/  ${chalk.dim(getPageTitle(page))}`);
       }
-      return;
+      process.exit(0);
     }
 
     // ── Sync ───────────────────────────────────────────────────────────────
 
-    console.log("");
+    log.info("");
     let synced = 0;
     let failed = 0;
 
     for (const page of pages) {
       const title = getPageTitle(page);
-      const s = ora(`  ${title}`).start();
+      const s = log.spinner(`  ${title}`);
       try {
         const result = await syncer.processPage(page, {
           outputDir,
           fieldMap: config.frontmatter || {},
           slugProperty: config.slug_property,
-          onProgress: (msg) => (s.text = `  ${title} ${chalk.dim(msg)}`),
+          onProgress: (msg) => { s.text = `  ${title} ${chalk.dim(msg)}`; },
         });
         state[page.id] = new Date().toISOString();
         synced++;
         s.succeed(
           `  ${chalk.green(title)} ` +
-            chalk.dim(`→ ${result.slug}/  (${result.imageCount} image${result.imageCount !== 1 ? "s" : ""})`)
+            chalk.dim(`-> ${result.slug}/  (${result.imageCount} image${result.imageCount !== 1 ? "s" : ""})`)
         );
       } catch (err) {
         failed++;
@@ -463,12 +508,15 @@ program
 
     await syncer.saveState(stateFile, state);
 
-    console.log("");
-    console.log(
+    log.info("");
+    log.info(
       chalk.green(`✓ Synced ${synced} page${synced !== 1 ? "s" : ""}`) +
         (failed ? chalk.red(` · ${failed} failed`) : "") +
-        chalk.dim(`  →  ${outputDir}`)
+        chalk.dim(`  ->  ${outputDir}`)
     );
+
+    if (failed > 0) process.exit(1);
+    process.exit(0);
   });
 
 // ── watch ─────────────────────────────────────────────────────────────────────
